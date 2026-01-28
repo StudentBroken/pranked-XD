@@ -8,11 +8,11 @@
 // Conversion factor for microseconds to seconds
 #define uS_TO_S_FACTOR 1000000ULL  
 
-// DEBUG MODE: Uncomment to speed up time for testing (15 mins -> a few seconds)
+// DEBUG MODE: Uncomment to speed up time for testing
 // #define DEBUG_MODE 
 
 #ifdef DEBUG_MODE
-  #define INITIAL_WAIT_MIN 0.1 // 6 seconds for test
+  #define INITIAL_WAIT_MIN 0.1 // 6 seconds
   #define START_SLEEP_MIN  0.1
 #else
   #define INITIAL_WAIT_MIN 15
@@ -21,7 +21,6 @@
 
 /* ==========================================
    RTC MEMORY VARIABLES
-   (These survive Deep Sleep)
    ========================================== */
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR int currentSleepDurationMinutes = START_SLEEP_MIN; 
@@ -127,52 +126,66 @@ RTC_DATA_ATTR int songIndex = 0;
 void playHappyBirthday();
 void playTetris();
 void playNokia();
+void stopBuzzer(); // Helper to safely turn off sink-buzzer
+
+/* ==========================================
+   HELPER
+   ========================================== */
+void stopBuzzer() {
+  noTone(BUZZER_PIN);
+  // CRITICAL: Since Buzzer is on +5V, we must go HIGH to stop current flow.
+  // Or better, set to INPUT to be High Impedance (Disconnect).
+  // Writing HIGH on 3.3V logic against 5V source is still 1.7V diff, 
+  // but better than LOW.
+  digitalWrite(BUZZER_PIN, HIGH); 
+}
 
 /* ==========================================
    MAIN LOGIC
    ========================================== */
 void setup() {
-  // Initialize Serial
   Serial.begin(115200);
   delay(1000); 
 
+  // Initialize Pin: OUTPUT and HIGH (Off state for Sink config)
   pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, HIGH); 
 
-  // Check reset reason
   esp_reset_reason_t reason = esp_reset_reason();
 
   if (reason == ESP_RST_POWERON) {
-    // ------------------------------------------------
-    // CASE 1: FRESH POWER ON (Device Armed)
-    // ------------------------------------------------
+    // --- FRESH START ---
     Serial.println(">>> Power On Detected. Arming device...");
     
-    // --- NEW: Beep 5 times to confirm power ---
+    // --- Beep 5 times (Active Low Logic handled by tone, silence handled by stopBuzzer) ---
     for(int i=0; i<5; i++){
-      tone(BUZZER_PIN, 2000, 100); // 2kHz beep for 100ms
-      delay(200); // Wait 200ms
+      tone(BUZZER_PIN, 2000); // Start Sound
+      delay(100);             // Beep duration
+      stopBuzzer();           // Stop Sound (Force High)
+      delay(150);             // Silence duration
     }
-    noTone(BUZZER_PIN);
     // ------------------------------------------
     
-    // Reset Counters
     bootCount = 0;
     currentSleepDurationMinutes = START_SLEEP_MIN;
     songIndex = 0;
 
-    // Initial silent wait
     Serial.printf(">>> Waiting silently for %.1f minutes...\n", (float)INITIAL_WAIT_MIN);
     
+    // Ensure buzzer is floating/off before sleep
+    pinMode(BUZZER_PIN, INPUT); 
+
     uint64_t sleepSeconds = INITIAL_WAIT_MIN * 60;
     esp_sleep_enable_timer_wakeup(sleepSeconds * uS_TO_S_FACTOR);
     esp_deep_sleep_start();
   } 
   else {
-    // ------------------------------------------------
-    // CASE 2: WAKE UP CYCLE (Prank Mode)
-    // ------------------------------------------------
+    // --- WAKE UP ---
     Serial.printf(">>> Wake Up #%d\n", bootCount++);
-    Serial.printf(">>> Playing Song Index: %d\n", songIndex);
+    
+    // Set output again after sleep
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, HIGH);
 
     // Play Song
     switch (songIndex) {
@@ -181,24 +194,20 @@ void setup() {
       case 2: playNokia(); break;
     }
 
-    // Increment Song Index
+    // Increment
     songIndex++;
     if (songIndex > 2) songIndex = 0;
 
-    // Calculate Next Sleep
+    // Calculate Sleep
     int sleepTime = currentSleepDurationMinutes;
+    if (currentSleepDurationMinutes > 2) currentSleepDurationMinutes -= 2;
+    if (currentSleepDurationMinutes < 2) currentSleepDurationMinutes = 2;
 
-    // Decrement Logic
-    if (currentSleepDurationMinutes > 2) {
-      currentSleepDurationMinutes -= 2;
-    }
-    // Hard floor at 2 minutes
-    if (currentSleepDurationMinutes < 2) {
-      currentSleepDurationMinutes = 2;
-    }
-
-    Serial.printf(">>> Prank complete. Going back to sleep for %d minutes.\n", sleepTime);
+    Serial.printf(">>> Sleep for %d minutes.\n", sleepTime);
     Serial.flush(); 
+
+    // Safety: Set pin to Input before sleep to prevent 5V leakage
+    pinMode(BUZZER_PIN, INPUT);
 
     esp_sleep_enable_timer_wakeup(sleepTime * 60 * uS_TO_S_FACTOR);
     esp_deep_sleep_start();
@@ -206,12 +215,14 @@ void setup() {
 }
 
 void loop() {
-  // Unreachable code
+  // Unreachable
 }
 
 /* ==========================================
    SONG IMPLEMENTATIONS
    ========================================== */
+// NOTE: I added stopBuzzer() after every note to ensure the 
+// pin goes HIGH (Off) rather than defaulting to LOW (On/Short).
 
 void playHappyBirthday() {
   int tempo = 140;
@@ -239,8 +250,9 @@ void playHappyBirthday() {
       noteDuration *= 1.5; 
     }
     tone(BUZZER_PIN, melody[thisNote], noteDuration * 0.9);
-    delay(noteDuration);
-    noTone(BUZZER_PIN);
+    delay(noteDuration * 0.9);
+    stopBuzzer(); // Force HIGH
+    delay(noteDuration * 0.1);
   }
 }
 
@@ -269,8 +281,9 @@ void playTetris() {
       noteDuration *= 1.5; 
     }
     tone(BUZZER_PIN, melody[thisNote], noteDuration * 0.9);
-    delay(noteDuration);
-    noTone(BUZZER_PIN);
+    delay(noteDuration * 0.9);
+    stopBuzzer(); // Force HIGH
+    delay(noteDuration * 0.1);
   }
 }
 
@@ -295,7 +308,8 @@ void playNokia() {
       noteDuration *= 1.5; 
     }
     tone(BUZZER_PIN, melody[thisNote], noteDuration * 0.9);
-    delay(noteDuration);
-    noTone(BUZZER_PIN);
+    delay(noteDuration * 0.9);
+    stopBuzzer(); // Force HIGH
+    delay(noteDuration * 0.1);
   }
 }
