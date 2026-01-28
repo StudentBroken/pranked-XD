@@ -8,12 +8,11 @@
 // Conversion factor for microseconds to seconds
 #define uS_TO_S_FACTOR 1000000ULL  
 
-// DEBUG MODE: Uncomment the line below to speed up time for testing
-// (15 minutes becomes 5 seconds). 
+// DEBUG MODE: Uncomment to speed up time for testing (15 mins -> a few seconds)
 // #define DEBUG_MODE 
 
 #ifdef DEBUG_MODE
-  #define INITIAL_WAIT_MIN 0.1 // 6 seconds
+  #define INITIAL_WAIT_MIN 0.1 // 6 seconds for test
   #define START_SLEEP_MIN  0.1
 #else
   #define INITIAL_WAIT_MIN 15
@@ -135,8 +134,6 @@ void playNokia();
 void setup() {
   // Initialize Serial
   Serial.begin(115200);
-  
-  // Give Serial time to catch up if connected via USB
   delay(1000); 
 
   pinMode(BUZZER_PIN, OUTPUT);
@@ -145,8 +142,18 @@ void setup() {
   esp_reset_reason_t reason = esp_reset_reason();
 
   if (reason == ESP_RST_POWERON) {
-    // --- FRESH START ---
-    Serial.println(">>> Power On Detected. Starting Prank Sequence.");
+    // ------------------------------------------------
+    // CASE 1: FRESH POWER ON (Device Armed)
+    // ------------------------------------------------
+    Serial.println(">>> Power On Detected. Arming device...");
+    
+    // --- NEW: Beep 5 times to confirm power ---
+    for(int i=0; i<5; i++){
+      tone(BUZZER_PIN, 2000, 100); // 2kHz beep for 100ms
+      delay(200); // Wait 200ms
+    }
+    noTone(BUZZER_PIN);
+    // ------------------------------------------
     
     // Reset Counters
     bootCount = 0;
@@ -156,13 +163,14 @@ void setup() {
     // Initial silent wait
     Serial.printf(">>> Waiting silently for %.1f minutes...\n", (float)INITIAL_WAIT_MIN);
     
-    // Calculate seconds
     uint64_t sleepSeconds = INITIAL_WAIT_MIN * 60;
     esp_sleep_enable_timer_wakeup(sleepSeconds * uS_TO_S_FACTOR);
     esp_deep_sleep_start();
   } 
   else {
-    // --- WAKE UP CYCLE ---
+    // ------------------------------------------------
+    // CASE 2: WAKE UP CYCLE (Prank Mode)
+    // ------------------------------------------------
     Serial.printf(">>> Wake Up #%d\n", bootCount++);
     Serial.printf(">>> Playing Song Index: %d\n", songIndex);
 
