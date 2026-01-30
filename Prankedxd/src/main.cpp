@@ -8,7 +8,7 @@ USBHIDKeyboard Keyboard;
 Preferences preferences;
 
 const int PIN_BUTTON = 0;
-const int PIN_LED = 8;
+const int PIN_LED = 8; // Adjust if your board uses a different pin (Some S3 use 15 or 21)
 
 // --- Config & State ---
 struct Config {
@@ -56,6 +56,9 @@ void saveSettings() {
 // --- Helper Functions ---
 
 void sendStatus(String state, String msg, int progress = -1) {
+    // Only send if Serial is actually connected to avoid buffer filling
+    if(!Serial) return;
+
     JsonDocument doc;
     doc["type"] = "status";
     doc["state"] = state;
@@ -67,7 +70,6 @@ void sendStatus(String state, String msg, int progress = -1) {
     Serial.println(output);
 }
 
-// Check for serial commands constantly
 void handleSerial() {
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
@@ -80,13 +82,6 @@ void handleSerial() {
             if (cmd == "stop") {
                 abortRequested = true;
                 sendStatus("ABORT", "Stop command received");
-            }
-            else if (cmd == "start") {
-                // Trigger typing from web
-                // We handle this in loop, just set a flag or call function?
-                // Easier to handle via main loop logic, but for now:
-                // We can't call blocking typeHuman here.
-                // We will rely on the main loop button check or simple flag.
             }
             else if (cmd == "config") {
                 config.baseDelay = doc["baseDelay"];
@@ -119,19 +114,17 @@ void handleSerial() {
     }
 }
 
-// A delay that listens to Serial and Buttons
 void smartDelay(unsigned long ms) {
     unsigned long start = millis();
     while (millis() - start < ms) {
-        handleSerial(); // Allow commands during wait
+        handleSerial(); 
         
-        // Check hardware button for abort
         if (digitalRead(PIN_BUTTON) == LOW) {
             abortRequested = true;
         }
         
         if (abortRequested) break;
-        delay(1); // Small yield
+        delay(1); 
     }
 }
 
@@ -143,11 +136,10 @@ char getRandomChar() {
 void typeHuman() {
     isTyping = true;
     abortRequested = false;
-    digitalWrite(PIN_LED, LOW); // On
+    digitalWrite(PIN_LED, LOW); // LED ON
     
     sendStatus("COUNTDOWN", "Waiting start delay...", 0);
     
-    // Countdown
     for(int i=0; i<config.startDelay; i++) {
         smartDelay(1000);
         sendStatus("COUNTDOWN", String(config.startDelay - i) + "s remaining", (i*100)/config.startDelay);
@@ -156,7 +148,6 @@ void typeHuman() {
 
     if (!abortRequested) {
         sendStatus("TYPING", "Started typing...", 0);
-        
         int totalLen = textPayload.length();
 
         for (int i = 0; i < totalLen; i++) {
@@ -167,12 +158,9 @@ void typeHuman() {
 
             char c = textPayload[i];
             
-            // Send periodic progress updates (every 5 chars or so to reduce traffic)
-            if (i % 5 == 0) {
-                sendStatus("TYPING", "Typing...", (i * 100) / totalLen);
-            }
+            if (i % 5 == 0) sendStatus("TYPING", "Typing...", (i * 100) / totalLen);
 
-            // 1. Error Simulation
+            // Error Logic
             if (config.errorRate > 0 && random(0, config.errorRate) == 0 && c != '\n' && c != ' ') {
                 Keyboard.print(getRandomChar());
                 smartDelay(random(100, 300));
@@ -180,10 +168,8 @@ void typeHuman() {
                 smartDelay(random(50, 150));
             }
 
-            // 2. Type Char
             Keyboard.print(c);
 
-            // 3. Calc Delay
             int d = config.baseDelay + random(-config.delayVariance, config.delayVariance);
             if (d < 10) d = 10;
             
@@ -191,14 +177,14 @@ void typeHuman() {
                 d += random(50, 150); 
                 if (config.longPauseChance > 0 && random(0, config.longPauseChance) == 0) {
                     d += random(500, 2000); 
-                    sendStatus("TYPING", "Thinking (Long Pause)...", (i * 100) / totalLen);
+                    sendStatus("TYPING", "Thinking...", (i * 100) / totalLen);
                 }
             }
             smartDelay(d);
         }
     }
 
-    digitalWrite(PIN_LED, HIGH); // Off
+    digitalWrite(PIN_LED, HIGH); // LED OFF
     isTyping = false;
     
     if(!abortRequested) {
@@ -209,25 +195,39 @@ void typeHuman() {
 void setup() {
     pinMode(PIN_BUTTON, INPUT_PULLUP);
     pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, HIGH);
+    digitalWrite(PIN_LED, HIGH); 
 
-    Serial.begin(115200);
-    Keyboard.begin();
+    // 1. Initialize USB Stack
     USB.begin();
+    
+    // 2. Initialize Serial (CDC)
+    Serial.begin(115200);
+    
+    // IMPORTANT: Don't block if no serial monitor is connected
+    Serial.setTxTimeoutMs(0); 
+
+    // 3. Initialize Keyboard
+    Keyboard.begin();
 
     loadSettings();
     randomSeed(analogRead(1));
+    
+    // Blink to indicate boot success (even if Serial is dead)
+    for(int i=0; i<3; i++) {
+        digitalWrite(PIN_LED, LOW); delay(100);
+        digitalWrite(PIN_LED, HIGH); delay(100);
+    }
+    
+    Serial.println("ESP32-S3 HID Ready.");
 }
 
-// Debounce vars
 unsigned long lastDebounceTime = 0;
 bool buttonState;
 bool lastButtonState = HIGH;
 
 void loop() {
-    handleSerial(); // Listen for commands
+    handleSerial(); 
 
-    // Button Handling
     int reading = digitalRead(PIN_BUTTON);
     if (reading != lastButtonState) {
         lastDebounceTime = millis();
@@ -237,11 +237,10 @@ void loop() {
         if (reading != buttonState) {
             buttonState = reading;
             if (buttonState == LOW) {
-                // Button Pressed
                 if (isTyping) {
-                    abortRequested = true; // Stop if running
+                    abortRequested = true;
                 } else {
-                    typeHuman(); // Start if idle
+                    typeHuman();
                 }
             }
         }
