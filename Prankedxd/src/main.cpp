@@ -8,9 +8,8 @@ USBHIDKeyboard Keyboard;
 Preferences preferences;
 
 const int PIN_BUTTON = 0;
-const int PIN_LED = 8; // Adjust if your board uses a different pin (Some S3 use 15 or 21)
+const int PIN_LED = 8; 
 
-// --- Config & State ---
 struct Config {
     int baseDelay;
     int delayVariance;
@@ -22,11 +21,9 @@ struct Config {
 Config config;
 String textPayload = "";
 
-// State tracking
 bool isTyping = false;
 bool abortRequested = false;
 
-// --- NVS Storage ---
 void loadSettings() {
     preferences.begin("human_hid", false);
     config.baseDelay = preferences.getInt("base", 70);
@@ -53,12 +50,8 @@ void saveSettings() {
     preferences.end();
 }
 
-// --- Helper Functions ---
-
+// --- FIXED SEND STATUS ---
 void sendStatus(String state, String msg, int progress = -1) {
-    // Only send if Serial is actually connected to avoid buffer filling
-    if(!Serial) return;
-
     JsonDocument doc;
     doc["type"] = "status";
     doc["state"] = state;
@@ -67,12 +60,18 @@ void sendStatus(String state, String msg, int progress = -1) {
     
     String output;
     serializeJson(doc, output);
-    Serial.println(output);
+    // Send regardless of DTR state, but rely on timeout to prevent blocking
+    Serial.println(output); 
 }
 
 void handleSerial() {
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
+        
+        // Filter out empty lines
+        input.trim();
+        if(input.length() == 0) return;
+
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, input);
 
@@ -90,13 +89,13 @@ void handleSerial() {
                 config.longPauseChance = doc["longPauseChance"];
                 config.startDelay = doc["startDelay"];
                 saveSettings();
-                sendStatus("CONFIG", "Configuration saved");
+                sendStatus("CONFIG_SAVED", "Configuration saved to memory");
             }
             else if (cmd == "text") {
                 String newText = doc["data"];
                 textPayload = newText;
                 saveSettings();
-                sendStatus("TEXT", "Text payload updated", textPayload.length());
+                sendStatus("TEXT_SAVED", "Text payload updated", textPayload.length());
             }
             else if (cmd == "get") {
                 JsonDocument resp;
@@ -136,7 +135,7 @@ char getRandomChar() {
 void typeHuman() {
     isTyping = true;
     abortRequested = false;
-    digitalWrite(PIN_LED, LOW); // LED ON
+    digitalWrite(PIN_LED, LOW); 
     
     sendStatus("COUNTDOWN", "Waiting start delay...", 0);
     
@@ -160,7 +159,6 @@ void typeHuman() {
             
             if (i % 5 == 0) sendStatus("TYPING", "Typing...", (i * 100) / totalLen);
 
-            // Error Logic
             if (config.errorRate > 0 && random(0, config.errorRate) == 0 && c != '\n' && c != ' ') {
                 Keyboard.print(getRandomChar());
                 smartDelay(random(100, 300));
@@ -184,7 +182,7 @@ void typeHuman() {
         }
     }
 
-    digitalWrite(PIN_LED, HIGH); // LED OFF
+    digitalWrite(PIN_LED, HIGH); 
     isTyping = false;
     
     if(!abortRequested) {
@@ -197,28 +195,15 @@ void setup() {
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, HIGH); 
 
-    // 1. Initialize USB Stack
     USB.begin();
-    
-    // 2. Initialize Serial (CDC)
     Serial.begin(115200);
     
-    // IMPORTANT: Don't block if no serial monitor is connected
+    // CRITICAL: Prevent blocking if web is closed
     Serial.setTxTimeoutMs(0); 
 
-    // 3. Initialize Keyboard
     Keyboard.begin();
-
     loadSettings();
     randomSeed(analogRead(1));
-    
-    // Blink to indicate boot success (even if Serial is dead)
-    for(int i=0; i<3; i++) {
-        digitalWrite(PIN_LED, LOW); delay(100);
-        digitalWrite(PIN_LED, HIGH); delay(100);
-    }
-    
-    Serial.println("ESP32-S3 HID Ready.");
 }
 
 unsigned long lastDebounceTime = 0;
